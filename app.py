@@ -32,7 +32,6 @@ def leer_factura(xml_texto):
 
         proveedor = root.find(".//{*}AccountingSupplierParty//{*}RegistrationName")
         nit = root.find(".//{*}AccountingSupplierParty//{*}CompanyID")
-
         cliente = root.find(".//{*}AccountingCustomerParty//{*}RegistrationName")
 
         numero = root.find(".//{*}ID")
@@ -67,9 +66,16 @@ if archivo is not None:
 
         if datos:
             st.success("Factura procesada")
+
             st.write("Proveedor:", datos["proveedor"])
+            st.write("NIT:", datos["nit"])
+            st.write("Cliente:", datos["cliente"])
             st.write("Número:", datos["numero"])
+            st.write("Fecha:", datos["fecha"])
+            st.write("Subtotal:", datos["subtotal"])
+            st.write("IVA:", datos["iva"])
             st.write("Total:", datos["total"])
+
         else:
             st.error("No se pudo leer el XML")
 
@@ -86,12 +92,17 @@ if archivo is not None:
             if nombre.endswith(".xml"):
 
                 xml_texto = zip_data.read(nombre).decode("utf-8")
-
                 datos = leer_factura(xml_texto)
 
                 if datos:
                     st.success(f"Factura encontrada: {nombre}")
+
                     st.write("Proveedor:", datos["proveedor"])
+                    st.write("NIT:", datos["nit"])
+                    st.write("Cliente:", datos["cliente"])
                     st.write("Número:", datos["numero"])
+                    st.write("Fecha:", datos["fecha"])
+                    st.write("Subtotal:", datos["subtotal"])
+                    st.write("IVA:", datos["iva"])
                     st.write("Total:", datos["total"])
                     st.write("---")
