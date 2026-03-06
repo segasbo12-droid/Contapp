@@ -12,10 +12,6 @@ archivo = st.file_uploader(
 )
 
 def extraer_invoice(xml_texto):
-    """
-    Si el XML es un AttachedDocument de la DIAN,
-    extrae la factura que viene dentro del CDATA
-    """
     if "AttachedDocument" in xml_texto:
         match = re.search(r'<!\[CDATA\[(.*?)\]\]>', xml_texto, re.DOTALL)
         if match:
@@ -30,57 +26,86 @@ def leer_factura(xml_texto):
     try:
         root = ET.fromstring(xml_factura)
 
-        proveedor = root.find(".//{*}AccountingSupplierParty//{*}RegistrationName")
-        nit = root.find(".//{*}AccountingSupplierParty//{*}CompanyID")
-        cliente = root.find(".//{*}AccountingCustomerParty//{*}RegistrationName")
-
+        proveedor = root.find(".//{*}RegistrationName")
         numero = root.find(".//{*}ID")
-        fecha = root.find(".//{*}IssueDate")
-
-        subtotal = root.find(".//{*}LineExtensionAmount")
-        iva = root.find(".//{*}TaxAmount")
         total = root.find(".//{*}PayableAmount")
+        base = root.find(".//{*}TaxExclusiveAmount")
+        iva = root.find(".//{*}TaxAmount")
 
         return {
             "proveedor": proveedor.text if proveedor is not None else "No encontrado",
-            "nit": nit.text if nit is not None else "No encontrado",
-            "cliente": cliente.text if cliente is not None else "No encontrado",
             "numero": numero.text if numero is not None else "No encontrado",
-            "fecha": fecha.text if fecha is not None else "No encontrado",
-            "subtotal": subtotal.text if subtotal is not None else "No encontrado",
-            "iva": iva.text if iva is not None else "No encontrado",
-            "total": total.text if total is not None else "No encontrado"
+            "total": float(total.text) if total is not None else 0,
+            "base": float(base.text) if base is not None else 0,
+            "iva": float(iva.text) if iva is not None else 0
         }
 
     except:
         return None
 
 
+def generar_asiento(datos):
+
+    asiento = [
+        {
+            "cuenta": "1435 - Inventarios / Gasto",
+            "debito": datos["base"],
+            "credito": 0
+        },
+        {
+            "cuenta": "2408 - IVA descontable",
+            "debito": datos["iva"],
+            "credito": 0
+        },
+        {
+            "cuenta": "2205 - Proveedores",
+            "debito": 0,
+            "credito": datos["total"]
+        }
+    ]
+
+    return asiento
+
+
+def mostrar_asiento(asiento):
+
+    st.subheader("📊 Asiento contable sugerido")
+
+    for linea in asiento:
+        st.write(
+            linea["cuenta"],
+            " | Débito:",
+            f'{linea["debito"]:,.2f}',
+            " | Crédito:",
+            f'{linea["credito"]:,.2f}'
+        )
+
+
 if archivo is not None:
 
-    # SI ES XML
     if archivo.name.endswith(".xml"):
 
         xml_texto = archivo.read().decode("utf-8")
         datos = leer_factura(xml_texto)
 
         if datos:
+
             st.success("Factura procesada")
 
             st.write("Proveedor:", datos["proveedor"])
-            st.write("NIT:", datos["nit"])
-            st.write("Cliente:", datos["cliente"])
             st.write("Número:", datos["numero"])
-            st.write("Fecha:", datos["fecha"])
-            st.write("Subtotal:", datos["subtotal"])
+            st.write("Base:", datos["base"])
             st.write("IVA:", datos["iva"])
             st.write("Total:", datos["total"])
+
+            asiento = generar_asiento(datos)
+
+            mostrar_asiento(asiento)
 
         else:
             st.error("No se pudo leer el XML")
 
 
-    # SI ES ZIP
     elif archivo.name.endswith(".zip"):
 
         st.info("Procesando ZIP...")
@@ -92,17 +117,21 @@ if archivo is not None:
             if nombre.endswith(".xml"):
 
                 xml_texto = zip_data.read(nombre).decode("utf-8")
+
                 datos = leer_factura(xml_texto)
 
                 if datos:
+
                     st.success(f"Factura encontrada: {nombre}")
 
                     st.write("Proveedor:", datos["proveedor"])
-                    st.write("NIT:", datos["nit"])
-                    st.write("Cliente:", datos["cliente"])
                     st.write("Número:", datos["numero"])
-                    st.write("Fecha:", datos["fecha"])
-                    st.write("Subtotal:", datos["subtotal"])
+                    st.write("Base:", datos["base"])
                     st.write("IVA:", datos["iva"])
                     st.write("Total:", datos["total"])
+
+                    asiento = generar_asiento(datos)
+
+                    mostrar_asiento(asiento)
+
                     st.write("---")
