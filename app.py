@@ -1,46 +1,84 @@
 import streamlit as st
 import xml.etree.ElementTree as ET
-import pandas as pd
+import zipfile
+import io
+import re
 
-st.title("Demo – Factura Electrónica DIAN")
+st.title("📄 Lector de Facturas Electrónicas DIAN")
 
-archivo = st.file_uploader("Cargar XML de la DIAN", type="xml")
+archivo = st.file_uploader(
+    "Sube un XML o un ZIP con facturas",
+    type=["xml", "zip"]
+)
 
-if archivo:
-    tree = ET.parse(archivo)
-    root = tree.getroot()
+def extraer_invoice(xml_texto):
+    """
+    Si el XML es un AttachedDocument de la DIAN,
+    extrae la factura que viene dentro del CDATA
+    """
+    if "AttachedDocument" in xml_texto:
+        match = re.search(r'<!\[CDATA\[(.*?)\]\]>', xml_texto, re.DOTALL)
+        if match:
+            xml_texto = match.group(1)
+    return xml_texto
 
-    ns = {
-        'cbc': 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2',
-        'cac': 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2'
-    }
+
+def leer_factura(xml_texto):
+
+    xml_factura = extraer_invoice(xml_texto)
 
     try:
-        fecha = root.find('.//cbc:IssueDate', ns).text
-        numero = root.find('.//cbc:ID', ns).text
-        total = root.find('.//cbc:PayableAmount', ns).text
+        root = ET.fromstring(xml_factura)
+
+        proveedor = root.find(".//{*}RegistrationName")
+        numero = root.find(".//{*}ID")
+        total = root.find(".//{*}PayableAmount")
+
+        return {
+            "proveedor": proveedor.text if proveedor is not None else "No encontrado",
+            "numero": numero.text if numero is not None else "No encontrado",
+            "total": total.text if total is not None else "No encontrado"
+        }
+
     except:
-        st.error("Este XML no parece ser una factura DIAN válida")
-        st.stop()
+        return None
 
-    st.subheader("Datos de la factura")
-    st.write("Número:", numero)
-    st.write("Fecha:", fecha)
-    st.write("Total:", total)
 
-    st.subheader("Asiento contable sugerido")
+if archivo is not None:
 
-    df = pd.DataFrame({
-        "Cuenta": ["1305", "4135"],
-        "Débito": [float(total), 0],
-        "Crédito": [0, float(total)]
-    })
+    # SI ES XML
+    if archivo.name.endswith(".xml"):
 
-    st.table(df)
+        xml_texto = archivo.read().decode("utf-8")
+        datos = leer_factura(xml_texto)
 
-    st.download_button(
-        "Exportar asiento (CSV)",
-        df.to_csv(index=False),
-        "asiento_contable.csv",
-        "text/csv"
-    )
+        if datos:
+            st.success("Factura procesada")
+            st.write("Proveedor:", datos["proveedor"])
+            st.write("Número:", datos["numero"])
+            st.write("Total:", datos["total"])
+        else:
+            st.error("No se pudo leer el XML")
+
+
+    # SI ES ZIP
+    elif archivo.name.endswith(".zip"):
+
+        st.info("Procesando ZIP...")
+
+        zip_data = zipfile.ZipFile(io.BytesIO(archivo.read()))
+
+        for nombre in zip_data.namelist():
+
+            if nombre.endswith(".xml"):
+
+                xml_texto = zip_data.read(nombre).decode("utf-8")
+
+                datos = leer_factura(xml_texto)
+
+                if datos:
+                    st.success(f"Factura encontrada: {nombre}")
+                    st.write("Proveedor:", datos["proveedor"])
+                    st.write("Número:", datos["numero"])
+                    st.write("Total:", datos["total"])
+                    st.write("---")
