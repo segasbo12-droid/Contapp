@@ -30,13 +30,26 @@ def leer_factura(xml_texto):
     try:
         root = ET.fromstring(xml_factura)
 
-        proveedor = root.find(".//{*}RegistrationName")
+        proveedor = root.find(".//{*}AccountingSupplierParty//{*}RegistrationName")
+        nit = root.find(".//{*}AccountingSupplierParty//{*}CompanyID")
+
+        cliente = root.find(".//{*}AccountingCustomerParty//{*}RegistrationName")
+
         numero = root.find(".//{*}ID")
+        fecha = root.find(".//{*}IssueDate")
+
+        subtotal = root.find(".//{*}LineExtensionAmount")
+        iva = root.find(".//{*}TaxAmount")
         total = root.find(".//{*}PayableAmount")
 
         return {
             "proveedor": proveedor.text if proveedor is not None else "No encontrado",
+            "nit": nit.text if nit is not None else "No encontrado",
+            "cliente": cliente.text if cliente is not None else "No encontrado",
             "numero": numero.text if numero is not None else "No encontrado",
+            "fecha": fecha.text if fecha is not None else "No encontrado",
+            "subtotal": subtotal.text if subtotal is not None else "No encontrado",
+            "iva": iva.text if iva is not None else "No encontrado",
             "total": total.text if total is not None else "No encontrado"
         }
 
