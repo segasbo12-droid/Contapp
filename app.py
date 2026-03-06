@@ -1,178 +1,175 @@
 import streamlit as st
+import pandas as pd
 import xml.etree.ElementTree as ET
 import zipfile
 import io
-import re
-import pandas as pd
 
-st.title("📄 Lector de Facturas Electrónicas DIAN")
+st.title("Automatizador Contable - Factura DIAN")
 
-archivo = st.file_uploader(
-    "Sube un XML o un ZIP con facturas",
-    type=["xml", "zip"]
-)
+# Cargar tablas
+tabla_cuentas_file = st.file_uploader("Subir tabla de cuentas", type=["xlsx"])
+tabla_retenciones_file = st.file_uploader("Subir tabla de retenciones", type=["xlsx"])
 
-# Cargar tabla de cuentas
-tabla_cuentas = pd.read_excel("tabla_cuentas.xlsx")
+if tabla_cuentas_file:
+    tabla_cuentas = pd.read_excel(tabla_cuentas_file)
+else:
+    tabla_cuentas = None
 
-def buscar_cuenta(descripcion):
-
-    descripcion = descripcion.lower()
-
-    for i, fila in tabla_cuentas.iterrows():
-
-        palabra = str(fila["palabra"]).lower()
-        cuenta = str(fila["cuenta"])
-
-        if palabra in descripcion:
-            return cuenta
-
-    return "5135"
+if tabla_retenciones_file:
+    tabla_retenciones = pd.read_excel(tabla_retenciones_file)
+else:
+    tabla_retenciones = None
 
 
-def extraer_invoice(xml_texto):
-
-    if "AttachedDocument" in xml_texto:
-
-        match = re.search(r'<!\[CDATA\[(.*?)\]\]>', xml_texto, re.DOTALL)
-
-        if match:
-            xml_texto = match.group(1)
-
-    return xml_texto
+# Subir factura
+archivo = st.file_uploader("Sube XML o ZIP de factura DIAN", type=["xml","zip"])
 
 
-def leer_factura(xml_texto):
+def leer_xml(xml_file):
 
-    xml_factura = extraer_invoice(xml_texto)
+    tree = ET.parse(xml_file)
+    root = tree.getroot()
 
-    try:
+    datos = {
+        "nit": "",
+        "proveedor": "",
+        "total": 0
+    }
 
-        root = ET.fromstring(xml_factura)
+    for elem in root.iter():
 
-        proveedor = root.find(".//{*}AccountingSupplierParty//{*}RegistrationName")
-        nit = root.find(".//{*}AccountingSupplierParty//{*}CompanyID")
+        if "CompanyID" in elem.tag:
+            datos["nit"] = elem.text
 
-        numero = root.find(".//{*}ID")
-        fecha = root.find(".//{*}IssueDate")
+        if "RegistrationName" in elem.tag:
+            datos["proveedor"] = elem.text
 
-        descripcion = root.find(".//{*}Description")
+        if "PayableAmount" in elem.tag:
+            datos["total"] = float(elem.text)
 
-        subtotal = root.find(".//{*}LineExtensionAmount")
-        iva = root.find(".//{*}TaxAmount")
-        total = root.find(".//{*}PayableAmount")
-
-        return {
-            "proveedor": proveedor.text if proveedor is not None else "No encontrado",
-            "nit": nit.text if nit is not None else "No encontrado",
-            "numero": numero.text if numero is not None else "No encontrado",
-            "fecha": fecha.text if fecha is not None else "No encontrado",
-            "descripcion": descripcion.text if descripcion is not None else "",
-            "subtotal": float(subtotal.text) if subtotal is not None else 0,
-            "iva": float(iva.text) if iva is not None else 0,
-            "total": float(total.text) if total is not None else 0
-        }
-
-    except:
-        return None
+    return datos
 
 
-def generar_asiento(datos):
+def buscar_cuenta(concepto):
 
-    subtotal = datos["subtotal"]
-    iva = datos["iva"]
-    total = datos["total"]
+    if tabla_cuentas is None:
+        return "0000"
 
-    descripcion = datos["descripcion"]
+    for i,row in tabla_cuentas.iterrows():
 
-    cuenta_debito = buscar_cuenta(descripcion)
+        if row["concepto"].lower() in concepto.lower():
+            return row["cuenta"]
 
-    retefuente = subtotal * 0.11
-    reteica = subtotal * 0.00966
-
-    asiento = [
-        [datos["nit"], datos["proveedor"], cuenta_debito, subtotal, 0],
-        [datos["nit"], datos["proveedor"], "2408", iva, 0],
-        [datos["nit"], datos["proveedor"], "2365", 0, retefuente],
-        [datos["nit"], datos["proveedor"], "2368", 0, reteica],
-        [datos["nit"], datos["proveedor"], "2205", 0, total - retefuente - reteica]
-    ]
-
-    df = pd.DataFrame(
-        asiento,
-        columns=["NIT","Proveedor","Cuenta contable","Debito","Credito"]
-    )
-
-    return df
+    return "0000"
 
 
-if archivo is not None:
+def calcular_retenciones(base, concepto):
 
-    facturas = []
+    retenciones = []
 
-    if archivo.name.endswith(".xml"):
+    if tabla_retenciones is None:
+        return retenciones
 
-        xml_texto = archivo.read().decode("utf-8")
+    for i,row in tabla_retenciones.iterrows():
 
-        datos = leer_factura(xml_texto)
+        if row["concepto"].lower() in concepto.lower():
 
-        if datos:
-            facturas.append(datos)
+            valor = base * (row["porcentaje"] / 100)
 
-    elif archivo.name.endswith(".zip"):
+            retenciones.append({
+                "cuenta": row["cuenta"],
+                "valor": valor
+            })
 
-        zip_data = zipfile.ZipFile(io.BytesIO(archivo.read()))
+    return retenciones
 
-        for nombre in zip_data.namelist():
+
+if archivo:
+
+    xml_data = None
+
+    if archivo.name.endswith(".zip"):
+
+        z = zipfile.ZipFile(archivo)
+
+        for nombre in z.namelist():
 
             if nombre.endswith(".xml"):
+                xml_data = z.open(nombre)
+                break
 
-                xml_texto = zip_data.read(nombre).decode("utf-8")
+    else:
+        xml_data = archivo
 
-                datos = leer_factura(xml_texto)
 
-                if datos:
-                    facturas.append(datos)
+    datos = leer_xml(xml_data)
 
-    if len(facturas) > 0:
+    st.write("Proveedor:", datos["proveedor"])
+    st.write("NIT:", datos["nit"])
+    st.write("Total:", datos["total"])
 
-        st.success(f"{len(facturas)} factura(s) procesada(s)")
 
-        todos_asientos = []
+    concepto = st.text_input("Concepto contable (ej: servicios, compra, inventario)")
 
-        for datos in facturas:
 
-            st.write("Proveedor:", datos["proveedor"])
-            st.write("NIT:", datos["nit"])
-            st.write("Factura:", datos["numero"])
-            st.write("Descripción:", datos["descripcion"])
-            st.write("Subtotal:", datos["subtotal"])
-            st.write("IVA:", datos["iva"])
-            st.write("Total:", datos["total"])
-            st.write("---")
+    if st.button("Generar asiento"):
 
-            df = generar_asiento(datos)
+        cuenta_gasto = buscar_cuenta(concepto)
 
-            todos_asientos.append(df)
+        subtotal = datos["total"]
 
-        df_final = pd.concat(todos_asientos)
+        asientos = []
 
-        st.subheader("Asiento contable generado")
+        # Debito gasto
+        asientos.append([
+            datos["nit"],
+            datos["proveedor"],
+            cuenta_gasto,
+            subtotal,
+            0
+        ])
+
+        # Calcular retenciones
+        retenciones = calcular_retenciones(subtotal, concepto)
+
+        total_retenciones = 0
+
+        for r in retenciones:
+
+            total_retenciones += r["valor"]
+
+            asientos.append([
+                datos["nit"],
+                datos["proveedor"],
+                r["cuenta"],
+                0,
+                r["valor"]
+            ])
+
+        # Cuenta proveedor
+        cuenta_proveedor = "2205"
+
+        asientos.append([
+            datos["nit"],
+            datos["proveedor"],
+            cuenta_proveedor,
+            0,
+            subtotal - total_retenciones
+        ])
+
+        df_final = pd.DataFrame(
+            asientos,
+            columns=["NIT","Proveedor","Cuenta","Debito","Credito"]
+        )
 
         st.dataframe(df_final)
 
-        excel_file = "asientos_contables.xlsx"
+        excel = io.BytesIO()
 
-        df_final.to_excel(excel_file, index=False)
+        df_final.to_excel(excel,index=False)
 
-        with open(excel_file, "rb") as f:
-
-            st.download_button(
-                "📥 Descargar Excel contable",
-                f,
-                file_name="asientos_contables.xlsx"
-            )
-
-    else:
-
-        st.error("No se pudieron leer facturas válidas")
+        st.download_button(
+            "Descargar Excel",
+            data=excel.getvalue(),
+            file_name="asiento_contable.xlsx"
+        )
