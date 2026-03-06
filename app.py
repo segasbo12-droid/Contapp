@@ -3,6 +3,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 import io
 import re
+import pandas as pd
 
 st.title("📄 Lector de Facturas Electrónicas DIAN")
 
@@ -26,62 +27,68 @@ def leer_factura(xml_texto):
     try:
         root = ET.fromstring(xml_factura)
 
-        proveedor = root.find(".//{*}RegistrationName")
+        proveedor = root.find(".//{*}AccountingSupplierParty//{*}RegistrationName")
+        nit = root.find(".//{*}AccountingSupplierParty//{*}CompanyID")
+
+        cliente = root.find(".//{*}AccountingCustomerParty//{*}RegistrationName")
+
         numero = root.find(".//{*}ID")
-        total = root.find(".//{*}PayableAmount")
-        base = root.find(".//{*}TaxExclusiveAmount")
+        fecha = root.find(".//{*}IssueDate")
+
+        subtotal = root.find(".//{*}LineExtensionAmount")
         iva = root.find(".//{*}TaxAmount")
+        total = root.find(".//{*}PayableAmount")
 
         return {
             "proveedor": proveedor.text if proveedor is not None else "No encontrado",
+            "nit": nit.text if nit is not None else "No encontrado",
+            "cliente": cliente.text if cliente is not None else "No encontrado",
             "numero": numero.text if numero is not None else "No encontrado",
-            "total": float(total.text) if total is not None else 0,
-            "base": float(base.text) if base is not None else 0,
-            "iva": float(iva.text) if iva is not None else 0
+            "fecha": fecha.text if fecha is not None else "No encontrado",
+            "subtotal": float(subtotal.text) if subtotal is not None else 0,
+            "iva": float(iva.text) if iva is not None else 0,
+            "total": float(total.text) if total is not None else 0
         }
 
     except:
         return None
 
 
-def generar_asiento(datos):
+def generar_asiento(datos, tipo_operacion):
+
+    subtotal = datos["subtotal"]
+    iva = datos["iva"]
+    total = datos["total"]
+
+    retefuente = subtotal * 0.11
+    reteica = subtotal * 0.00966
+
+    if tipo_operacion == "Inventario":
+        cuenta_debito = "1435"
+    elif tipo_operacion == "Costo":
+        cuenta_debito = "6135"
+    else:
+        cuenta_debito = "5135"
 
     asiento = [
-        {
-            "cuenta": "1435 - Inventarios / Gasto",
-            "debito": datos["base"],
-            "credito": 0
-        },
-        {
-            "cuenta": "2408 - IVA descontable",
-            "debito": datos["iva"],
-            "credito": 0
-        },
-        {
-            "cuenta": "2205 - Proveedores",
-            "debito": 0,
-            "credito": datos["total"]
-        }
+        [datos["nit"], datos["proveedor"], cuenta_debito, subtotal, 0],
+        [datos["nit"], datos["proveedor"], "2408", iva, 0],
+        [datos["nit"], datos["proveedor"], "2365", 0, retefuente],
+        [datos["nit"], datos["proveedor"], "2368", 0, reteica],
+        [datos["nit"], datos["proveedor"], "2205", 0, total - retefuente - reteica]
     ]
 
-    return asiento
+    df = pd.DataFrame(
+        asiento,
+        columns=["NIT","Proveedor","Cuenta contable","Debito","Credito"]
+    )
 
-
-def mostrar_asiento(asiento):
-
-    st.subheader("📊 Asiento contable sugerido")
-
-    for linea in asiento:
-        st.write(
-            linea["cuenta"],
-            " | Débito:",
-            f'{linea["debito"]:,.2f}',
-            " | Crédito:",
-            f'{linea["credito"]:,.2f}'
-        )
+    return df
 
 
 if archivo is not None:
+
+    facturas = []
 
     if archivo.name.endswith(".xml"):
 
@@ -89,26 +96,9 @@ if archivo is not None:
         datos = leer_factura(xml_texto)
 
         if datos:
-
-            st.success("Factura procesada")
-
-            st.write("Proveedor:", datos["proveedor"])
-            st.write("Número:", datos["numero"])
-            st.write("Base:", datos["base"])
-            st.write("IVA:", datos["iva"])
-            st.write("Total:", datos["total"])
-
-            asiento = generar_asiento(datos)
-
-            mostrar_asiento(asiento)
-
-        else:
-            st.error("No se pudo leer el XML")
-
+            facturas.append(datos)
 
     elif archivo.name.endswith(".zip"):
-
-        st.info("Procesando ZIP...")
 
         zip_data = zipfile.ZipFile(io.BytesIO(archivo.read()))
 
@@ -121,17 +111,50 @@ if archivo is not None:
                 datos = leer_factura(xml_texto)
 
                 if datos:
+                    facturas.append(datos)
 
-                    st.success(f"Factura encontrada: {nombre}")
+    if len(facturas) > 0:
 
-                    st.write("Proveedor:", datos["proveedor"])
-                    st.write("Número:", datos["numero"])
-                    st.write("Base:", datos["base"])
-                    st.write("IVA:", datos["iva"])
-                    st.write("Total:", datos["total"])
+        st.success(f"{len(facturas)} factura(s) procesada(s)")
 
-                    asiento = generar_asiento(datos)
+        tipo_operacion = st.selectbox(
+            "Tipo de operación contable",
+            ["Inventario","Costo","Gasto"]
+        )
 
-                    mostrar_asiento(asiento)
+        todos_asientos = []
 
-                    st.write("---")
+        for datos in facturas:
+
+            st.write("Proveedor:", datos["proveedor"])
+            st.write("NIT:", datos["nit"])
+            st.write("Factura:", datos["numero"])
+            st.write("Subtotal:", datos["subtotal"])
+            st.write("IVA:", datos["iva"])
+            st.write("Total:", datos["total"])
+            st.write("---")
+
+            df = generar_asiento(datos, tipo_operacion)
+
+            todos_asientos.append(df)
+
+        df_final = pd.concat(todos_asientos)
+
+        st.subheader("Asiento contable generado")
+
+        st.dataframe(df_final)
+
+        excel_file = "asientos_contables.xlsx"
+        df_final.to_excel(excel_file, index=False)
+
+        with open(excel_file, "rb") as f:
+
+            st.download_button(
+                "📥 Descargar Excel contable",
+                f,
+                file_name="asientos_contables.xlsx"
+            )
+
+    else:
+
+        st.error("No se pudieron leer facturas válidas")
